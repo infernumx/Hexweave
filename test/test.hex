@@ -1,0 +1,314 @@
+// Comprehensive Test File for Custom Language
+
+print("--- Basic Declarations and Printing ---");
+int i = 10;
+float f = 3.14;
+string s = "hello";
+bool t = true;
+bool ff = false; // Renamed from 'f' to avoid conflict
+obj o_str = "initial string";
+obj o_int = 99;
+
+print(i);       // Expected: 10
+print(f);       // Expected: 3.14
+print(s);       // Expected: hello
+print(t);       // Expected: true
+print(ff);      // Expected: false
+print(o_str);   // Expected: initial string
+print(o_int);   // Expected: 99
+print(nil);     // Expected: nil
+
+print(""); // Newline
+
+// --- Reassignment ---
+print("--- Reassignment ---");
+i = i + 5;
+f = f * 2.0;
+s = s + " world";
+t = !t;
+o_str = 12345; // Assign int to obj
+o_int = false; // Assign bool to obj
+
+print(i);       // Expected: 15
+print(f);       // Expected: 6.28
+print(s);       // Expected: hello world
+print(t);       // Expected: false
+print(o_str);   // Expected: 12345
+print(o_int);   // Expected: false
+
+print("");
+
+// --- Arithmetic Operations ---
+print("--- Arithmetic Operations ---");
+int a = 20;
+int b = 7;
+float fa = 20.0;
+float fb = 7.0;
+
+print(a + b);   // Expected: 27
+print(a - b);   // Expected: 13
+print(a * b);   // Expected: 140
+print(a / b);   // Expected: 2.857... (Float division)
+print(fa / fb); // Expected: 2.857...
+print(a % b);   // Expected: 6
+print(fa % fb); // Expected: 6.0 (Float modulo)
+print(10 + 5.5); // Expected: 15.5 (Mixed type)
+print(-a);      // Expected: -20
+print(-fa);     // Expected: -20.0
+
+print("");
+
+// --- String Concatenation ---
+print("--- String Concatenation ---");
+string s1 = "part1";
+string s2 = "part2";
+print(s1 + " " + s2); // Expected: part1 part2
+print("Number as string: " + 100); // Expected: Number as string: 100
+
+print("");
+
+// --- Comparison Operations ---
+print("--- Comparison Operations ---");
+print(10 == 10);    // Expected: true
+print(10 != 10);    // Expected: false
+print(10 == 10.0);  // Expected: true (Numeric comparison)
+print("a" == "a");  // Expected: true
+print("a" != "b");  // Expected: true
+print(nil == nil);  // Expected: true
+print(nil == 0);    // Expected: false
+print(10 > 5);      // Expected: true
+print(10 >= 10);    // Expected: true
+print(5 < 10);      // Expected: true
+print(5 <= 5);      // Expected: true
+print(5.5 > 5);     // Expected: true
+
+print("");
+
+// --- Logical Operations ---
+print("--- Logical Operations ---");
+print(true and true);   // Expected: true
+print(true and false);  // Expected: false
+print(true or false);   // Expected: true
+print(false or false);  // Expected: false
+print(!true);           // Expected: false
+print(!false);          // Expected: true
+print(!nil);            // Expected: true (nil is falsy)
+print(!"");             // Expected: true (empty string might be falsy depending on isTruthy) - Current isTruthy makes it true
+print(!0);              // Expected: true (0 might be falsy depending on isTruthy) - Current isTruthy makes it true
+print(10 > 5 and "a" == "a"); // Expected: true
+
+print("");
+
+// --- Blocks and Scoping ---
+print("--- Blocks and Scoping ---");
+int outer = 100;
+print(outer); // Expected: 100
+{
+    int inner = 200;
+    print(inner); // Expected: 200
+    print(outer); // Expected: 100 (Access outer scope)
+    outer = 150; // Modify outer scope variable
+    int outer = 300; // Shadow outer variable
+    print(outer); // Expected: 300 (Inner shadow)
+}
+print(outer); // Expected: 150 (Outer variable was modified)
+
+print("");
+
+// --- If/Else Statements ---
+print("--- If/Else Statements ---");
+if (true) {
+    print("if(true) executed");
+} else {
+    print("else executed (should not happen)");
+}
+
+if (10 < 5) {
+     print("if(false) executed (should not happen)");
+} else {
+     print("else executed");
+}
+
+int condition_var = 5;
+if (condition_var == 5) {
+    print("condition_var is 5");
+}
+
+if (condition_var > 10) {
+    print("condition_var > 10 (false)");
+} else if (condition_var < 3) {
+     print("condition_var < 3 (false)");
+} else {
+     print("condition_var is not > 10 and not < 3");
+}
+
+print("");
+
+// --- While Loops ---
+print("--- While Loops ---");
+int counter = 0;
+while (counter < 3) {
+    print("while loop iteration: " + counter);
+    counter = counter + 1;
+}
+print("while loop finished");
+
+print("");
+
+// --- For Loops ---
+print("--- For Loops ---");
+for int k : (0, 4) { // Range is exclusive of the end value
+    print("for loop iteration: " + k);
+}
+print("for loop finished");
+
+print("");
+
+
+// --- Function Definition and Calls ---
+print("--- Functions ---");
+
+fn greet(string name) : string {
+    string message = "Hello, " + name + "!";
+    return message;
+}
+
+fn add(int x, int y) : int {
+    return x + y;
+}
+
+fn returns_nil() : nil {
+    // Implicit nil return should now be allowed for nil return type
+}
+
+fn print_and_return_float(float val) : float {
+    print("Printing float inside function: " + val);
+    return val * 1.5;
+}
+
+string greeting = greet("Interpreter");
+print(greeting); // Expected: Hello, Interpreter!
+
+int sum = add(15, 27);
+print(sum); // Expected: 42
+
+print(returns_nil()); // Expected: nil
+
+float result_float = print_and_return_float(10.0); // Expected: Printing float inside function: 10.0
+print(result_float); // Expected: 15.0
+
+print("");
+
+// --- Closures ---
+print("--- Closures ---");
+
+fn make_adder(int amount) : obj { // Return type obj to hold function type
+    fn adder(int value) : int {
+        return value + amount; // Captures 'amount' from outer scope
+    }
+    return adder; // Return the inner function
+}
+
+obj add5 = make_adder(5);
+obj add10 = make_adder(10);
+
+print( 20 | add5 );  // Expected: 25 (Calls add5(20))
+print( 30 | add10 ); // Expected: 40 (Calls add10(30))
+
+print("");
+
+
+// --- Pipe Operator ---
+print("--- Pipe Operator ---");
+
+fn multiply_by_two(int x) : int {
+    return x * 2;
+}
+
+fn int_to_string(int x) : string {
+    return "Value is: " + x; // Assumes int to string conversion works with '+'
+}
+
+int initial_val = 7;
+string final_str = (initial_val | multiply_by_two) | int_to_string;
+print(final_str); // Expected: Value is: 14
+
+print("");
+
+// --- Type Checking Examples ---
+print("--- Type Checking ---");
+// int bad_assign_str = "abc"; // Should cause TypeError during interpretation
+// string bad_assign_int = 123; // Should cause TypeError
+float ok_assign_int = 100; // Implicit conversion int -> float should be allowed
+print(ok_assign_int); // Expected: 100.0 (or similar float representation)
+
+fn requires_string(string s) : bool {
+    print("Inside requires_string: " + s);
+    return true;
+}
+// requires_string(123); // Should cause TypeError at call site
+
+fn returns_int() : int {
+    return 10;
+    // return "abc"; // Should cause TypeError on return
+}
+int ret_int = returns_int();
+print(ret_int); // Expected: 10
+
+// fn returns_int_but_is_wrong() : int {
+//     // Implicit nil return here would cause TypeError
+// }
+// returns_int_but_is_wrong(); // Call would likely throw TypeError
+
+// Test explicit return nil from function declared : nil
+fn explicit_returns_nil() : nil {
+    return nil;
+}
+print(explicit_returns_nil()); // Expected: nil
+
+print("");
+
+// <<< --- Map Type Tests --- >>>
+print("--- Map Type Tests ---");
+
+// Declaration with literal
+map[string, int] scores = { "alice": 100, "bob": 95 };
+print(scores); // Expected: { "alice": 100, "bob": 95 } (order might vary)
+
+// Declaration without literal (empty map)
+map[string, string] names;
+print(names); // Expected: {}
+
+// Accessing elements
+print(scores["alice"]); // Expected: 100
+print(scores["bob"]);   // Expected: 95
+print(scores["charlie"]); // Expected: nil (Accessing non-existent key)
+
+// Assigning elements
+scores["bob"] = 98;
+scores["charlie"] = 80;
+print(scores["bob"]);     // Expected: 98
+print(scores["charlie"]); // Expected: 80
+
+names["first"] = "John";
+names["last"] = "Doe";
+print(names["first"] + " " + names["last"]); // Expected: John Doe
+
+// Assigning map to obj
+obj generic_map = scores;
+print(generic_map); // Expected: { "alice": 100, "bob": 98, "charlie": 80 }
+
+// Access via obj variable (requires obj to support map access)
+print(generic_map["alice"]); // This might require specific handling for obj[key]
+
+// Type checking map assignment
+map[string, bool] flags = { "active": true };
+// scores = flags; // Should cause TypeError if uncommented
+
+// Assigning wrong value type to map element
+scores["david"] = "passed"; // Should cause TypeError if uncommented (expected int)
+print(scores);
+
+
+print("");
+print("--- End of Tests ---");

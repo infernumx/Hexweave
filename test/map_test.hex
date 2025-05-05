@@ -1,0 +1,152 @@
+// Map Type Comprehensive Test File
+
+print("--- Map Declaration and Literals ---");
+
+// Declare with int values
+map[string, int] scores = { "alice": 100, "bob": 95, "eve": 70 };
+print(scores); // Expected: {"alice": 100, "bob": 95, "eve": 70} (order may vary)
+
+// Declare with string values
+map[string, string] capitals = { "uk": "london", "france": "paris" };
+print(capitals); // Expected: {"uk": "london", "france": "paris"}
+
+// Declare with float values
+map[string, float] prices = { "apple": 0.55, "banana": 0.40 };
+print(prices); // Expected: {"apple": 0.55, "banana": 0.4}
+
+// Declare with bool values
+map[string, bool] flags = { "active": true, "enabled": false };
+print(flags); // Expected: {"active": true, "enabled": false}
+
+// Declare with obj values (mixed types allowed in value)
+map[string, obj] mixed_bag = { "name": "data", "count": 5, "valid": true, "pi": 3.14 };
+print(mixed_bag); // Expected: {"name": "data", "count": 5, "valid": true, "pi": 3.14}
+
+// Declare empty map
+map[string, int] empty_int_map;
+print(empty_int_map); // Expected: {}
+
+map[string, obj] empty_obj_map;
+print(empty_obj_map); // Expected: {}
+
+// Declare map initialized with nil (only allowed if value type is obj or nil)
+// map[string, int] nil_map_int = nil; // Should cause TypeError if uncommented
+map[string, obj] nil_map_obj = nil;
+print(nil_map_obj); // Expected: nil
+
+print("");
+
+print("--- Map Access ---");
+print(scores["alice"]);   // Expected: 100
+print(capitals["france"]); // Expected: paris
+print(prices["apple"]);   // Expected: 0.55
+print(flags["active"]);   // Expected: true
+print(mixed_bag["count"]); // Expected: 5
+
+// Access non-existent key
+print(scores["david"]); // Expected: nil
+print(empty_int_map["anything"]); // Expected: nil
+
+// Access with non-string key (should fail)
+// print(scores[123]); // Uncomment to test TypeError for non-string key
+
+print("");
+
+print("--- Map Assignment (Add/Update) ---");
+
+// Update existing keys
+scores["bob"] = 99;
+capitals["uk"] = "London"; // Case change
+flags["enabled"] = true;
+mixed_bag["count"] = mixed_bag["count"] + 10; // Use existing value
+
+print(scores);   // Expected: {"alice": 100, "bob": 99, "eve": 70}
+print(capitals); // Expected: {"uk": "London", "france": "paris"}
+print(flags);    // Expected: {"active": true, "enabled": true}
+print(mixed_bag["count"]); // Expected: 15
+
+// Add new keys
+scores["david"] = 88;
+capitals["germany"] = "berlin";
+prices["orange"] = 0.60;
+flags["pending"] = false;
+mixed_bag["new_item"] = nil;
+
+print(scores);   // Expected: {"alice": 100, "bob": 99, "eve": 70, "david": 88}
+print(capitals); // Expected: {"uk": "London", "france": "paris", "germany": "berlin"}
+print(prices);   // Expected: {"apple": 0.55, "banana": 0.4, "orange": 0.6}
+print(flags);    // Expected: {"active": true, "enabled": true, "pending": false}
+print(mixed_bag); // Expected: {"name": "data", "count": 15, "valid": true, "pi": 3.14, "new_item": nil}
+
+// Assign to empty map
+empty_int_map["first"] = 1;
+empty_int_map["second"] = 2;
+print(empty_int_map); // Expected: {"first": 1, "second": 2}
+
+// Assign using non-string key (should fail)
+// scores[true] = 100; // Uncomment to test TypeError
+
+print("");
+
+print("--- Map Type Checking ---");
+
+// Assigning compatible types (int to float map value)
+map[string, float] temps = { "monday": 15.5 };
+temps["tuesday"] = 18; // Assign int to float map value (should work)
+print(temps); // Expected: {"monday": 15.5, "tuesday": 18}
+
+// Assigning incompatible types (string to int map value)
+// scores["frank"] = "failed"; // Uncomment to test TypeError
+
+// Assigning incompatible types (bool to string map value)
+// capitals["spain"] = true; // Uncomment to test TypeError
+
+// Assigning nil to map elements
+map[string, obj] maybe_values = { "a": 1 };
+maybe_values["b"] = nil; // Should be allowed for obj value type
+print(maybe_values); // Expected: {"a": 1, "b": nil}
+
+// map[string, int] cannot_be_nil;
+// cannot_be_nil["c"] = nil; // Uncomment to test TypeError
+
+// Assigning incompatible map types
+// scores = capitals; // Uncomment to test TypeError (map[s,i] = map[s,s])
+// scores = mixed_bag; // Uncomment to test TypeError (map[s,i] = map[s,obj])
+
+print("");
+
+print("--- Map Comparisons ---");
+
+map[string, int] scores_copy = { "alice": 100, "bob": 99, "eve": 70, "david": 88 };
+map[string, int] scores_diff_val = { "alice": 100, "bob": 100, "eve": 70, "david": 88 };
+map[string, int] scores_diff_key = { "alice": 100, "bob": 99, "evelyn": 70, "david": 88 };
+map[string, int] scores_subset = { "alice": 100, "bob": 99 };
+
+print(scores == scores_copy);      // Expected: true
+print(scores == scores_diff_val);  // Expected: false
+print(scores == scores_diff_key);  // Expected: false
+print(scores == scores_subset);    // Expected: false
+print(scores != scores_copy);      // Expected: false
+print(scores != scores_diff_val);  // Expected: true
+print(empty_int_map == {});        // Expected: true (Comparing with empty literal)
+
+// Comparison operators <, <=, >, >= should fail for maps
+// print(scores < scores_copy); // Uncomment to test TypeError
+// print(scores > scores_diff_key); // Uncomment to test TypeError
+
+print("");
+
+print("--- Map and Obj Interaction ---");
+obj my_obj = scores; // Assign map to obj
+print(my_obj); // Expected: {"alice": 100, "bob": 99, "eve": 70, "david": 88}
+
+// Accessing map elements via obj variable - This depends on whether
+// the interpreter implements obj[key] access that delegates to map access.
+// Currently, it's not implemented, so this would likely fail if uncommented.
+// print(my_obj["alice"]);
+
+// Assigning non-map to map variable
+// map[string, int] not_a_map = "hello"; // Uncomment to test TypeError
+
+print("");
+print("--- End of Map Tests ---");

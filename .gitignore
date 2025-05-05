@@ -1,32 +1,63 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
+# Build output directories
+build/
+Build/
+bin/
+Bin/
+obj/
+Obj/
+Debug/
+Release/
+x64/
+x86/
+out/
+install/
 *.slo
 *.lo
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
+*.a
+*.lib
 *.so
 *.dylib
 *.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
 *.exe
-*.out
-*.app
+*.pdb
+*.ilk
+
+# Log files
+*.log
+debug.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE settings/files
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# CMake files (if using CMake and generating build files in source)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# Doxygen documentation (if generated in source)
+docs/html
+docs/latex
+
+# Other temporary/backup files
+*~
+*.bak
+*.tmp
+

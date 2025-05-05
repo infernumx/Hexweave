@@ -1,0 +1,84 @@
+// Delete Keyword Test File
+
+print("--- Variable Deletion Tests ---");
+
+int x = 10;
+print("x before delete: " + x); // Expected: x before delete: 10
+
+delete x;
+print("Variable x deleted.");
+
+// Accessing deleted variable (should cause RuntimeError: Undefined variable 'x')
+// Uncomment the next line to test the error:
+// print("x after delete: " + x);
+
+// Test deletion within a scope
+int y = 100;
+print("y (outer) before block: " + y); // Expected: y (outer) before block: 100
+{
+    int y = 200; // Shadow outer y
+    print("y (inner) before delete: " + y); // Expected: y (inner) before delete: 200
+    delete y;
+    print("Inner y deleted.");
+    // print(y); // Uncomment to test: Should cause "Undefined variable 'y'" in this scope
+}
+print("y (outer) after block: " + y); // Expected: y (outer) after block: 100 (Outer y unaffected)
+
+// Test deleting variable not defined in current scope (should fail)
+{
+    int z = 5;
+}
+// delete z; // Uncomment to test: Should cause "Cannot delete variable 'z'..." error
+
+print("");
+
+print("--- Map Entry Deletion Tests ---");
+
+map[string, string] capitals = { "uk": "London", "france": "Paris", "germany": "Berlin" };
+print("Capitals before delete: " + capitals); // Expected: {"uk": "London", "france": "Paris", "germany": "Berlin"}
+
+delete capitals["france"];
+print("Deleted capitals['france']");
+print("Capitals after deleting 'france': " + capitals); // Expected: {"uk": "London", "germany": "Berlin"}
+
+// Access deleted entry
+print("Accessing capitals['france']: " + capitals["france"]); // Expected: Accessing capitals['france']: nil
+
+// Delete non-existent entry (should succeed silently)
+delete capitals["spain"];
+print("Attempted delete of non-existent key 'spain'");
+print("Capitals after deleting 'spain': " + capitals); // Expected: {"uk": "London", "germany": "Berlin"}
+
+// Delete last entry
+delete capitals["uk"];
+delete capitals["germany"];
+print("Deleted remaining entries");
+print("Capitals after deleting all: " + capitals); // Expected: {}
+
+print("");
+
+print("--- Invalid Delete Tests ---");
+// These should cause RuntimeErrors if uncommented
+
+// print("Attempting: delete 123;");
+// delete 123;
+
+//print("Attempting: delete { 'a': 1 };");
+//delete { "a": 1 };
+
+fn test_func() : nil {}
+//print("Attempting: delete test_func;");
+//delete test_func;
+//print("About to call deleted function...");
+// This should now parse correctly but fail at runtime
+//print(123, "abc", test_func()); // Use function-call syntax
+//print("This should not be printed if error occurred.");
+
+//print("Attempting: delete test_func();"); // Deleting call result is not allowed
+//delete test_func();
+
+//print("Attempting: delete capitals;"); // Deleting the map variable itself is allowed
+//delete capitals;
+
+print("--- End Delete Tests ---");
+
