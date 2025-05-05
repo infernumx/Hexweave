@@ -4,7 +4,7 @@ print("Starting main script...");
 
 // --- Test 1: Import a valid file ---
 print("Attempting to import module1.hex...");
-import "module1.hex";
+import "modules/module1.hex";
 print("Import statement for module1.hex processed.");
 // Later, when execution is implemented, you would call functions/use variables from module1 here.
 // e.g., print(module1_message); sayHello("From Main");

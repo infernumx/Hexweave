@@ -15,7 +15,7 @@
 #include <typeinfo> // For typeid (used in error reporting)
 #include <vector>
 #include <set>       // For tracking imported files
-#include <filesystem> // <<< ADDED: For path manipulation (C++17)
+#include <filesystem> // For path manipulation (C++17)
 
 
 Interpreter::Interpreter() : globals(std::make_shared<Environment>()), environment(globals) {
@@ -30,9 +30,19 @@ Interpreter::Interpreter() : globals(std::make_shared<Environment>()), environme
 }
 
 // Store source context for error reporting
-// <<< MODIFIED: Now also resets import tracking for a new top-level run >>>
 void Interpreter::setSourceContext(const std::string& filename, const std::vector<std::string>& source_lines) {
-    current_filename_ = filename;
+    // Attempt to get a canonical path for the initial file for consistent tracking
+    std::string initial_canonical_path = filename;
+    try {
+        if (!filename.empty() && filename != "<unknown>" && filename != "<stdin>") { // Avoid canonical on special names
+             initial_canonical_path = std::filesystem::canonical(filename).string();
+        }
+    } catch(const std::filesystem::filesystem_error& e) {
+        debug_log << "Warning: Could not get canonical path for initial file '" << filename << "': " << e.what() << std::endl;
+        // Use the original filename if canonical fails
+    }
+
+    current_filename_ = initial_canonical_path; // Store the potentially canonical path
     current_source_lines_ = source_lines;
     // Clear import tracking when starting interpretation of a new top-level file
     currently_importing_.clear();
@@ -78,13 +88,13 @@ void Interpreter::reportError(const LangError& error,
 
 // --- Main Execution Logic ---
 void Interpreter::interpret(const std::vector<std::unique_ptr<AST::Statement>>& statements,
-                           const std::string& filename,
+                           const std::string& filename, // Should be canonical path if possible
                            const std::vector<std::string>& source_lines)
 {
     // Store context for this specific run (might be recursive for imports)
     std::string previous_filename = current_filename_;
     std::vector<std::string> previous_source_lines = current_source_lines_;
-    current_filename_ = filename;
+    current_filename_ = filename; // Use the provided (potentially canonical) filename
     current_source_lines_ = source_lines;
 
     // RAII Guard to restore context when done
@@ -193,7 +203,7 @@ Value Interpreter::visitDeleteStmt(AST::DeleteStmt& stmt) { if (AST::VariableExp
 Value Interpreter::visitBreakStmt(AST::BreakStmt& stmt) { throw BreakSignal(stmt.keyword.line); }
 Value Interpreter::visitContinueStmt(AST::ContinueStmt& stmt) { throw ContinueSignal(stmt.keyword.line); }
 
-// <<< MODIFIED: visitImportStmt Implementation >>>
+// visitImportStmt Implementation
 Value Interpreter::visitImportStmt(AST::ImportStmt& stmt) {
     // 1. Get the filename from the token's literal
     if (!std::holds_alternative<std::string>(stmt.filename_token.literal)) {
@@ -201,37 +211,52 @@ Value Interpreter::visitImportStmt(AST::ImportStmt& stmt) {
     }
     const std::string& relative_filename = std::get<std::string>(stmt.filename_token.literal);
 
-    // --- TODO: Implement proper path resolution ---
-    // For now, assume the filename is relative to the *current working directory*
-    // A better approach resolves relative to the *importing file's directory*.
-    std::filesystem::path import_path = relative_filename; // Using relative path directly for now
+    // 2. Resolve the path relative to the importing file
+    std::filesystem::path base_path;
+    // Check if the current filename is a valid path and has a parent directory
+    if (!current_filename_.empty() && current_filename_ != "<unknown>" && current_filename_ != "<stdin>") {
+         std::filesystem::path current_file_path(current_filename_);
+         if (current_file_path.has_parent_path()) {
+              base_path = current_file_path.parent_path();
+         } else {
+              // If current_filename_ has no directory part, assume it's in the CWD
+              base_path = std::filesystem::current_path();
+         }
+    } else {
+         // If no current file context, fall back to current working directory
+         base_path = std::filesystem::current_path();
+         debug_log << "Warning: Importing relative to current working directory because current file path is unknown." << std::endl;
+    }
+
+    std::filesystem::path import_path = base_path / relative_filename;
     std::string canonical_path_str;
+
     try {
-         // Attempt to get a canonical path to use as a unique key for tracking imports
-         // This resolves symlinks and makes the path absolute.
-         // Requires C++17 filesystem library.
+         // Normalize the path and attempt to get a canonical version for tracking
+         import_path = import_path.lexically_normal(); // Handle ., .. etc.
          canonical_path_str = std::filesystem::canonical(import_path).string();
     } catch (const std::filesystem::filesystem_error& fs_err) {
-         // If canonical fails (e.g., file not found yet), use the provided path string.
-         // We still need to try opening it.
-         canonical_path_str = relative_filename;
-         debug_log << "Warning: Could not get canonical path for '" << relative_filename << "': " << fs_err.what() << std::endl;
+         // If canonical fails (e.g., file not found), use the normalized path string.
+         // We still need to try opening it with this path.
+         canonical_path_str = import_path.string(); // Use the normalized path
+         debug_log << "Warning: Could not get canonical path for '" << import_path.string() << "': " << fs_err.what() << std::endl;
     }
 
 
-    debug_log << "Attempting to import canonical path: '" << canonical_path_str << "' (from '" << relative_filename << "' at " << current_filename_ << ":" << stmt.line << ")" << std::endl;
+    debug_log << "Attempting to import resolved path: '" << import_path.string() << "' (Canonical key: '" << canonical_path_str << "') from statement at " << current_filename_ << ":" << stmt.line << std::endl;
 
 
-    // 2. Circular Dependency Check
+    // 3. Circular Dependency Check
     if (currently_importing_.count(canonical_path_str)) {
         debug_log << "Circular import detected: '" << canonical_path_str << "' is already being imported. Skipping." << std::endl;
         return Value(); // Already processing this file, do nothing.
     }
 
-    // 3. Read the file content
-    std::ifstream file_stream(import_path); // Use the original (potentially relative) path to open
+    // 4. Read the file content using the resolved path
+    std::ifstream file_stream(import_path); // Use the resolved path to open
     if (!file_stream) {
-        throw RuntimeError("Cannot open import file '" + relative_filename + "'.", stmt.line);
+        // Use the *original* relative filename in the error message for clarity
+        throw RuntimeError("Cannot open import file '" + relative_filename + "' (Resolved to: '" + import_path.string() + "').", stmt.line);
     }
     std::stringstream buffer;
     buffer << file_stream.rdbuf();
@@ -241,7 +266,7 @@ Value Interpreter::visitImportStmt(AST::ImportStmt& stmt) {
     std::string source_code = buffer.str();
     file_stream.close(); // Close the file stream
 
-    // 4. Mark this file as being imported *before* processing its content
+    // 5. Mark this file as being imported *before* processing its content
     currently_importing_.insert(canonical_path_str);
 
     // RAII Guard to remove the file from the set when done (even if errors occur)
@@ -255,7 +280,7 @@ Value Interpreter::visitImportStmt(AST::ImportStmt& stmt) {
         }
     } import_guard(*this, canonical_path_str);
 
-    // 5. Lex & Parse the imported code
+    // 6. Lex & Parse the imported code
     debug_log << "Lexing imported file: '" << canonical_path_str << "'" << std::endl;
     Lexer lexer(source_code);
     std::vector<Token> tokens = lexer.scanTokens();
@@ -267,13 +292,13 @@ Value Interpreter::visitImportStmt(AST::ImportStmt& stmt) {
     // TODO: Handle parser errors (parse might just print and synchronize)
     // Maybe check if parser encountered errors and propagate?
 
-    // 6. Execute the parsed statements
+    // 7. Execute the parsed statements
     // Important: The imported code runs in the *current* environment for now.
     // We need to decide how to handle scope/namespaces later.
     // We recursively call interpret, passing the imported file's context.
     debug_log << "Interpreting imported file: '" << canonical_path_str << "'" << std::endl;
     std::vector<std::string> imported_source_lines = splitIntoLines(source_code); // Get lines for error reporting
-    interpret(statements, canonical_path_str, imported_source_lines);
+    interpret(statements, canonical_path_str, imported_source_lines); // Pass canonical path for context
 
     // Check if an error occurred during the interpretation of the imported file
     if (had_error_) {
@@ -294,7 +319,6 @@ Value Interpreter::visitImportStmt(AST::ImportStmt& stmt) {
 
     return Value(); // Import statement itself doesn't produce a value
 }
-// <<< END MODIFIED >>>
 
 
 // --- Helpers ---
@@ -306,7 +330,7 @@ ValueType Interpreter::getValueTypeFromToken(const Token& type_token) { switch(t
 void Interpreter::checkType(const Value& value_to_check, const Token& expected_type_token, const std::optional<Token>& expected_map_key_type_token, const std::optional<Token>& expected_map_value_type_token, const std::optional<Token>& expected_list_element_type_token, const std::string& context, int line_num) { ValueType expected_primary_type = getValueTypeFromToken(expected_type_token); ValueType actual_type = value_to_check.getType(); if (actual_type == ValueType::NIL) { if (expected_primary_type == ValueType::NIL || expected_primary_type == ValueType::OBJECT || expected_primary_type == ValueType::MAP || expected_primary_type == ValueType::FUNCTION || expected_primary_type == ValueType::LIST) { return; } else { throw TypeError("Cannot assign 'nil' to type '" + tokenTypeToString(expected_type_token.type) + "' in " + context + ".", line_num); } } bool primary_type_mismatch = false; if (expected_primary_type == ValueType::FLOAT && actual_type == ValueType::INT) { /* Allowed */ } else if (expected_primary_type == ValueType::FUNCTION && (actual_type == ValueType::FUNCTION || actual_type == ValueType::NATIVE_FUNCTION)) { /* Allowed */ } else if (actual_type != expected_primary_type) { if (expected_primary_type != ValueType::OBJECT) { primary_type_mismatch = true; } } if (primary_type_mismatch) { throw TypeError("Type mismatch for " + context + ". Expected '" + valueTypeToString(expected_primary_type) + "' but got '" + valueTypeToString(actual_type) + "'.", line_num); } if (expected_primary_type == ValueType::MAP && expected_map_key_type_token && expected_map_value_type_token && !value_to_check.isNil()) { if (!value_to_check.isMap()) { throw TypeError("Type mismatch for " + context + ". Expected 'map' but got '" + valueTypeToString(actual_type) + "'.", line_num); } Token key_type_token_for_check = expected_map_key_type_token.value(); Token value_type_token_for_check = expected_map_value_type_token.value(); const auto& map_data = value_to_check.getMapData(); for (const auto& pair : map_data) { checkType(pair.first, key_type_token_for_check, std::nullopt, std::nullopt, std::nullopt, context + " map key", line_num); checkType(pair.second, value_type_token_for_check, std::nullopt, std::nullopt, std::nullopt, context + " map value for key " + pair.first.toString(), line_num); } } else if (expected_primary_type == ValueType::LIST && expected_list_element_type_token && !value_to_check.isNil()) { if (!value_to_check.isList()) { throw TypeError("Type mismatch for " + context + ". Expected 'list' but got '" + valueTypeToString(actual_type) + "'.", line_num); } Token element_type_token_for_check = expected_list_element_type_token.value(); const auto& list_data = value_to_check.getListData(); int element_index = 0; for (const auto& element : list_data) { checkType(element, element_type_token_for_check, std::nullopt, std::nullopt, std::nullopt, context + " list element at index " + std::to_string(element_index), line_num); element_index++; } } }
 void Interpreter::checkType(const Value& value, const Token& type_specifier_token, const std::string& context, int line_num) { checkType(value, type_specifier_token, std::nullopt, std::nullopt, std::nullopt, context, line_num); }
 
-// <<< ADDED: Helper to split source into lines for error reporting >>>
+// Helper to split source into lines for error reporting
 std::vector<std::string> Interpreter::splitIntoLines(const std::string& source) {
     std::vector<std::string> lines;
     std::stringstream ss(source);
