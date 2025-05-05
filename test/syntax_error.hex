@@ -1,0 +1,10 @@
+// syntax_error.hex
+
+print("--- Inside syntax_error.hex ---");
+
+var x = 10;
+
+// Intentional syntax error: missing semicolon
+var y = 20
+
+print("--- This might not be reached if parsing happens immediately ---");

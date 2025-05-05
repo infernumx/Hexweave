@@ -1,9 +1,11 @@
 #include "interpreter.hpp"
 #include "common.hpp" // Include for debug_log and error types
-#include "lexer.hpp"  // Need Lexer to re-tokenize expressions
-#include "parser.hpp" // Need Parser to re-parse expressions
-#include "token.hpp"  // <<< ADDED: Include header defining InterpolationPartType
+#include "lexer.hpp"  // Need Lexer
+#include "parser.hpp" // Need Parser
+#include "token.hpp"  // Include header defining InterpolationPartType
 #include <iostream>
+#include <fstream>   // For file input
+#include <sstream>   // For reading file into string, splitting lines
 #include <cmath>     // For std::fabs, std::fmod
 #include <stdexcept>
 #include <utility> // For std::move
@@ -12,13 +14,8 @@
 #include <limits> // For numeric_limits
 #include <typeinfo> // For typeid (used in error reporting)
 #include <vector>
-#include <sstream> // For building interpolated string result
-
-// --- Interpolation Types (Assume defined in token.hpp or similar) ---
-// <<< REMOVED: Duplicate definition of InterpolationPartType and InterpolatedStringData >>>
-// enum class InterpolationPartType { LITERAL, EXPRESSION };
-// using InterpolatedStringData = std::vector<std::pair<InterpolationPartType, std::string>>;
-// --- End Interpolation Types ---
+#include <set>       // For tracking imported files
+#include <filesystem> // <<< ADDED: For path manipulation (C++17)
 
 
 Interpreter::Interpreter() : globals(std::make_shared<Environment>()), environment(globals) {
@@ -32,10 +29,13 @@ Interpreter::Interpreter() : globals(std::make_shared<Environment>()), environme
     globals->define("remove", Value(std::make_shared<NativeListRemove>()));
 }
 
-// Store source context for error reporting in interpolated expressions
+// Store source context for error reporting
+// <<< MODIFIED: Now also resets import tracking for a new top-level run >>>
 void Interpreter::setSourceContext(const std::string& filename, const std::vector<std::string>& source_lines) {
     current_filename_ = filename;
     current_source_lines_ = source_lines;
+    // Clear import tracking when starting interpretation of a new top-level file
+    currently_importing_.clear();
 }
 
 std::shared_ptr<Environment> Interpreter::getGlobalEnvironment() const {
@@ -50,12 +50,12 @@ std::string Interpreter::getSourceLineInternal(const std::vector<std::string>& l
     return "<Source line not available>";
 }
 
-// <<< FIXED: Removed default argument from definition >>>
+// Definition for reportError (default argument is only in header)
 void Interpreter::reportError(const LangError& error,
-                              const std::string& filename, // Use provided filename
-                              const std::vector<std::string>& source_lines, // Use provided lines
-                              const std::string& context_msg) { // Default argument is only in header
-    had_error_ = true;
+                              const std::string& filename,
+                              const std::vector<std::string>& source_lines,
+                              const std::string& context_msg) {
+    had_error_ = true; // Set the error flag
     std::string error_type = "Error";
     int line = -1;
     if (const RuntimeError* re = dynamic_cast<const RuntimeError*>(&error)) { error_type = "Runtime Error"; line = re->line; }
@@ -81,11 +81,27 @@ void Interpreter::interpret(const std::vector<std::unique_ptr<AST::Statement>>& 
                            const std::string& filename,
                            const std::vector<std::string>& source_lines)
 {
-    // Store context before starting interpretation
-    setSourceContext(filename, source_lines);
+    // Store context for this specific run (might be recursive for imports)
+    std::string previous_filename = current_filename_;
+    std::vector<std::string> previous_source_lines = current_source_lines_;
+    current_filename_ = filename;
+    current_source_lines_ = source_lines;
 
-    had_error_ = false;
-    debug_log << ">>> Interpreter::interpret starting execution. Processing " << statements.size() << " statements." << std::endl;
+    // RAII Guard to restore context when done
+    struct ContextGuard {
+        Interpreter& interp;
+        std::string old_fname;
+        std::vector<std::string> old_lines;
+        ContextGuard(Interpreter& i, std::string fname, std::vector<std::string> lines)
+            : interp(i), old_fname(std::move(fname)), old_lines(std::move(lines)) {}
+        ~ContextGuard() {
+            interp.current_filename_ = old_fname;
+            interp.current_source_lines_ = old_lines;
+        }
+    } context_guard(*this, previous_filename, previous_source_lines);
+
+
+    debug_log << ">>> Interpreter::interpret starting execution. Processing " << statements.size() << " statements from '" << filename << "'." << std::endl;
     try {
         for (const auto& statement : statements) {
             if (statement) {
@@ -93,12 +109,16 @@ void Interpreter::interpret(const std::vector<std::unique_ptr<AST::Statement>>& 
             } else {
                  debug_log << " (NULL statement pointer encountered!)" << std::endl;
             }
-            // Optional: Stop execution immediately on first error
-            // if (had_error_) break;
+            // Stop execution immediately on first error within this file/context
+            if (had_error_) {
+                debug_log << ">>> Halting interpretation for '" << filename << "' due to error." << std::endl;
+                break;
+            }
         }
     } catch (const LangError& error) {
-        // Catch errors propagating from execute/evaluate
+        // Catch errors propagating from execute/evaluate within this context
         reportError(error, current_filename_, current_source_lines_);
+        // had_error_ is set by reportError
     } catch (const std::exception& e) {
         std::cerr << current_filename_ << ":? | System Error: " << e.what() << std::endl;
         debug_log << current_filename_ << ":? | System Error: " << e.what() << std::endl;
@@ -108,7 +128,8 @@ void Interpreter::interpret(const std::vector<std::unique_ptr<AST::Statement>>& 
          debug_log << current_filename_ << ":? | Unknown Error Occurred during interpretation." << std::endl;
          had_error_ = true;
     }
-     debug_log << ">>> Interpreter::interpret finished execution loop." << std::endl;
+     debug_log << ">>> Interpreter::interpret finished execution loop for '" << filename << "'." << std::endl;
+     // Note: had_error_ state persists after returning from interpret()
 }
 
 
@@ -124,97 +145,28 @@ Value Interpreter::evaluate(AST::Expression& expr) {
 void Interpreter::executeBlock(const std::vector<std::unique_ptr<AST::Statement>>& statements,
                                std::shared_ptr<Environment> block_environment) {
     std::shared_ptr<Environment> previous_environment = this->environment;
-    struct EnvironmentGuard { Interpreter& i; std::shared_ptr<Environment> o; EnvironmentGuard(Interpreter& interp, std::shared_ptr<Environment> orig) : i(interp), o(std::move(orig)) {} ~EnvironmentGuard() { i.environment = o; } } guard(*this, previous_environment);
-    this->environment = std::move(block_environment);
+    // RAII guard to restore environment when block scope exits
+    struct EnvironmentGuard {
+        Interpreter& i;
+        std::shared_ptr<Environment> o;
+        EnvironmentGuard(Interpreter& interp, std::shared_ptr<Environment> orig) : i(interp), o(std::move(orig)) {}
+        ~EnvironmentGuard() { i.environment = o; }
+    } guard(*this, previous_environment);
+
+    this->environment = std::move(block_environment); // Set the new environment for the block
+
     for (const auto& statement : statements) {
          if (statement) execute(*statement);
+         // If an error occurred within the block, stop executing the rest of the block
+         if (had_error_) break;
     }
+    // Environment is automatically restored by EnvironmentGuard destructor
 }
 
 // --- Visitor Implementations for Expressions ---
+// (visitLiteralExpr, visitInterpolatedStringExpr, visitVariableExpr, etc. remain the same)
 Value Interpreter::visitLiteralExpr(AST::LiteralExpr& expr) { return expr.value; }
-
-// visitInterpolatedStringExpr Implementation
-Value Interpreter::visitInterpolatedStringExpr(AST::InterpolatedStringExpr& expr) {
-    std::stringstream result_builder;
-    int original_line = expr.line; // Line where the backtick string started
-
-    for (const auto& part : expr.parts) {
-        // <<< FIXED: Use fully qualified name for enum value >>>
-        if (part.first == InterpolationPartType::LITERAL) {
-            // Append literal parts directly
-            result_builder << part.second;
-        } else { // InterpolationPartType::EXPRESSION
-            const std::string& expr_string = part.second;
-            if (expr_string.empty()) {
-                // Handle empty {} - append empty string.
-                continue;
-            }
-
-            // --- Re-Lex, Re-Parse, Evaluate the expression string ---
-            try {
-                debug_log << "Interpolating expression: {" << expr_string << "}" << std::endl;
-
-                // 1. Lex the expression string
-                // We need to lex the expression in isolation.
-                // Add a newline for EOF handling, but don't include it in error context.
-                Lexer expr_lexer(expr_string);
-                std::vector<Token> expr_tokens = expr_lexer.scanTokens();
-
-                // Remove the EOF token added by the lexer.
-                if (!expr_tokens.empty() && expr_tokens.back().type == TokenType::END_OF_FILE) {
-                    expr_tokens.pop_back();
-                }
-
-                if (expr_tokens.empty()) {
-                     // Throw error if the expression part was empty or only whitespace
-                     throw RuntimeError("Empty expression found within interpolated string.", original_line);
-                }
-
-                // 2. Parse the expression tokens.
-                // Create a temporary parser for these tokens.
-                Parser expr_parser(expr_tokens);
-
-                // Attempt to parse a single expression using the parser's expression() method.
-                std::unique_ptr<AST::Expression> parsed_expr = expr_parser.expression();
-
-                // Check if parsing succeeded and if the parser consumed all tokens.
-                // If not all tokens were consumed, it means there was extra stuff after the expression.
-                if (!parsed_expr) {
-                    // If expression() returned nullptr, an error likely occurred during parsing.
-                    // The parser should have thrown, but check just in case.
-                    throw RuntimeError("Invalid expression found within interpolated string (parsing failed).", original_line);
-                }
-                if (!expr_parser.isAtEnd()) {
-                    // If the parser didn't reach the end of the temporary token list,
-                    // it means there was more than just a single valid expression.
-                     throw RuntimeError("Invalid syntax within interpolated expression (extra tokens found after expression).", original_line);
-                }
-
-
-                // 3. Evaluate the parsed expression in the *current* interpreter environment
-                Value result_value = evaluate(*parsed_expr);
-
-                // 4. Convert the result to string and append
-                result_builder << result_value.toString();
-
-            } catch (const LangError& interp_error) {
-                 // Report error using the main context, adding a note about interpolation
-                 std::string context_msg = " (within interpolated string starting on line " + std::to_string(original_line) + ")";
-                 reportError(interp_error, current_filename_, current_source_lines_, context_msg);
-                 // Stop building the string on error and rethrow to halt execution.
-                 throw;
-            } catch (const std::exception& std_err) {
-                 // Handle unexpected C++ errors during re-parse/eval
-                 throw RuntimeError(std::string("Internal error during string interpolation: ") + std_err.what(), original_line);
-            }
-        }
-    }
-
-    return Value(result_builder.str());
-}
-
-
+Value Interpreter::visitInterpolatedStringExpr(AST::InterpolatedStringExpr& expr) { std::stringstream result_builder; int original_line = expr.line; for (const auto& part : expr.parts) { if (part.first == InterpolationPartType::LITERAL) { result_builder << part.second; } else { const std::string& expr_string = part.second; if (expr_string.empty()) { continue; } try { debug_log << "Interpolating expression: {" << expr_string << "}" << std::endl; Lexer expr_lexer(expr_string); std::vector<Token> expr_tokens = expr_lexer.scanTokens(); if (!expr_tokens.empty() && expr_tokens.back().type == TokenType::END_OF_FILE) { expr_tokens.pop_back(); } if (expr_tokens.empty()) { throw RuntimeError("Empty expression found within interpolated string.", original_line); } Parser expr_parser(expr_tokens); std::unique_ptr<AST::Expression> parsed_expr = expr_parser.expression(); if (!parsed_expr) { throw RuntimeError("Invalid expression found within interpolated string (parsing failed).", original_line); } if (!expr_parser.isAtEnd()) { throw RuntimeError("Invalid syntax within interpolated expression (extra tokens found after expression).", original_line); } Value result_value = evaluate(*parsed_expr); result_builder << result_value.toString(); } catch (const LangError& interp_error) { std::string context_msg = " (within interpolated string starting on line " + std::to_string(original_line) + ")"; reportError(interp_error, current_filename_, current_source_lines_, context_msg); throw; } catch (const std::exception& std_err) { throw RuntimeError(std::string("Internal error during string interpolation: ") + std_err.what(), original_line); } } } return Value(result_builder.str()); }
 Value Interpreter::visitVariableExpr(AST::VariableExpr& expr) { try { return environment->get(expr.name); } catch (const RuntimeError& /*e*/) { throw; } }
 Value Interpreter::visitAssignExpr(AST::AssignExpr& expr) { Value assigned_value = evaluate(*expr.value); int assignment_line = expr.equals_token.line; if (AST::VariableExpr* var_target = dynamic_cast<AST::VariableExpr*>(expr.target.get())) { try { const VariableInfo& var_info = environment->getInfo(var_target->name); checkType(assigned_value, var_info.declared_type_token, var_info.declared_map_key_type, var_info.declared_map_value_type, var_info.declared_list_element_type, "assignment to variable '" + var_target->name.lexeme + "'", assignment_line); environment->assign(var_target->name, assigned_value); } catch (const RuntimeError& /*e*/) { throw; } catch (const TypeError& /*e*/) { throw; } } else if (AST::IndexExpr* index_target = dynamic_cast<AST::IndexExpr*>(expr.target.get())) { Value collection_val = evaluate(*(index_target->collection)); Value index_val = evaluate(*(index_target->index)); if (collection_val.isList()) { if (!index_val.isInt()) { throw RuntimeError("List index for assignment must be an integer.", index_target->bracket.line); } int index = index_val.getInt(); try { auto& list_data = collection_val.getListData(); size_t size = list_data.size(); int effective_index = index; if (index < 0) { effective_index = static_cast<int>(size) + index; } if (effective_index < 0 || static_cast<size_t>(effective_index) >= size) { throw RuntimeError("List index out of bounds (" + std::to_string(index) + " for list of size " + std::to_string(size) + ").", index_target->bracket.line); } list_data[static_cast<size_t>(effective_index)] = assigned_value; } catch (const std::runtime_error& e) { throw RuntimeError(e.what(), index_target->bracket.line); } catch (const TypeError& e) { throw TypeError(e.what(), index_target->bracket.line); } } else if (collection_val.isMap()) { if (index_val.isMap() || index_val.isList() || index_val.isFunction() || index_val.isObject() || index_val.isNil()) { throw TypeError("Invalid type used as map key in assignment: " + valueTypeToString(index_val.getType()) + ".", index_target->bracket.line); } std::optional<Token> expected_key_type_token = std::nullopt; std::optional<Token> expected_value_type_token = std::nullopt; if (AST::VariableExpr* map_var_expr = dynamic_cast<AST::VariableExpr*>(index_target->collection.get())) { try { const VariableInfo& map_var_info = environment->getInfo(map_var_expr->name); if (map_var_info.declared_type_token.type == TokenType::MAP) { expected_key_type_token = map_var_info.declared_map_key_type; expected_value_type_token = map_var_info.declared_map_value_type; } else if (map_var_info.declared_type_token.type != TokenType::OBJ) { throw TypeError("Variable '" + map_var_expr->name.lexeme + "' is not a map or obj, cannot perform indexed assignment.", map_var_expr->line); } } catch (const RuntimeError&) { throw; } } if (expected_key_type_token) { try { checkType(index_val, *expected_key_type_token, "map key", index_target->bracket.line); } catch (const TypeError& e) { throw; } } if (expected_value_type_token) { try { checkType(assigned_value, *expected_value_type_token, "assignment to map element", assignment_line); } catch (const TypeError& e) { throw TypeError(std::string(e.what()) + " for key " + index_val.toString() + ".", assignment_line); } } try { collection_val.getMapData()[index_val] = assigned_value; } catch (const std::runtime_error& e) { throw RuntimeError(e.what(), index_target->bracket.line); } catch (const TypeError& e) { throw TypeError(e.what(), index_target->bracket.line); } } else { throw RuntimeError("Cannot perform indexed assignment '[]' on type '" + valueTypeToString(collection_val.getType()) + "'.", index_target->bracket.line); } } else if (AST::MapAccessExpr* map_access_target = dynamic_cast<AST::MapAccessExpr*>(expr.target.get())) { Value map_val = evaluate(*(map_access_target->map_expr)); if (!map_val.isMap()) { throw RuntimeError("Cannot perform indexed assignment on non-map type (using MapAccessExpr).", map_access_target->bracket.line); } Value key_val = evaluate(*(map_access_target->key_expr)); try { map_val.getMapData()[key_val] = assigned_value; } catch (const std::runtime_error& e) { throw RuntimeError(e.what(), map_access_target->bracket.line); } catch (const TypeError& e) { throw TypeError(e.what(), map_access_target->bracket.line); } debug_log << "Warning: Using deprecated MapAccessExpr for assignment at line " << expr.equals_token.line << std::endl; } else { throw RuntimeError("Invalid assignment target.", expr.equals_token.line); } return assigned_value; }
 Value Interpreter::visitLogicalExpr(AST::LogicalExpr& expr) { Value left = evaluate(*expr.left); if (expr.op.type == TokenType::OR) { if (isTruthy(left)) return left; } else { if (!isTruthy(left)) return left; } return evaluate(*expr.right); }
@@ -233,13 +185,116 @@ Value Interpreter::visitPrintStmt(AST::PrintStmt& stmt) { bool first = true; int
 Value Interpreter::visitVarDeclStmt(AST::VarDeclStmt& stmt) { Value initial_value; bool is_map_decl = stmt.type_specifier_token && stmt.type_specifier_token->type == TokenType::MAP; bool is_list_decl = stmt.type_specifier_token && stmt.type_specifier_token->type == TokenType::LIST; if (is_map_decl && !stmt.initializer) { initial_value = Value(std::make_shared<Value::MapDataType>()); } else if (is_list_decl && !stmt.initializer) { initial_value = Value(std::make_shared<Value::ListDataType>()); } if (stmt.initializer) { initial_value = evaluate(*stmt.initializer); } if (stmt.type_specifier_token) { try { checkType(initial_value, *stmt.type_specifier_token, stmt.map_key_type_token, stmt.map_value_type_token, stmt.list_element_type_token, "initialization of variable '" + stmt.name.lexeme + "'", stmt.name.line); environment->define(stmt.name.lexeme, initial_value, *stmt.type_specifier_token, stmt.map_key_type_token, stmt.map_value_type_token, stmt.list_element_type_token); } catch (const TypeError& e) { throw TypeError(e.what(), stmt.name.line); } } else { if (!stmt.initializer) { throw RuntimeError("Variable declaration using 'var' requires an initializer.", stmt.name.line); } environment->define(stmt.name.lexeme, initial_value); } return Value(); }
 Value Interpreter::visitBlockStmt(AST::BlockStmt& stmt) { executeBlock(stmt.statements, std::make_shared<Environment>(environment)); return Value(); }
 Value Interpreter::visitIfStmt(AST::IfStmt& stmt) { Value cond = evaluate(*stmt.condition); if (isTruthy(cond)) { execute(*stmt.then_branch); } else if (stmt.else_branch) { execute(*stmt.else_branch); } return Value(); }
-Value Interpreter::visitWhileStmt(AST::WhileStmt& stmt) { while (isTruthy(evaluate(*stmt.condition))) { try { execute(*stmt.body); } catch (const BreakSignal& ) { break; } catch (const ContinueSignal& ) { continue; } catch (const ReturnValue& ) { throw; } } return Value(); }
-Value Interpreter::visitForStmt(AST::ForStmt& stmt) { Value start_val = evaluate(*stmt.range_start); Value end_val = evaluate(*stmt.range_end); if (!start_val.isInt() || !end_val.isInt()) throw RuntimeError("For loop range bounds must be integers.", stmt.keyword.line); int start_int = start_val.getInt(); int end_int = end_val.getInt(); if (getValueTypeFromToken(stmt.variable_type) != ValueType::INT) throw TypeError("For loop variable type must be 'int' for integer range.", stmt.variable_type.line); for (int i = start_int; i < end_int; ++i) { auto loop_env = std::make_shared<Environment>(environment); loop_env->define(stmt.variable_name.lexeme, Value(i), stmt.variable_type); std::shared_ptr<Environment> previous_env = this->environment; struct EnvironmentGuard { Interpreter& i; std::shared_ptr<Environment> o; EnvironmentGuard(Interpreter& interp, std::shared_ptr<Environment> orig) : i(interp), o(std::move(orig)) {} ~EnvironmentGuard() { i.environment = o; } } guard(*this, previous_env); this->environment = loop_env; try { execute(*stmt.body); } catch (const BreakSignal& ) { break; } catch (const ContinueSignal& ) { continue; } catch (const ReturnValue& ) { throw; } } return Value(); }
+Value Interpreter::visitWhileStmt(AST::WhileStmt& stmt) { while (isTruthy(evaluate(*stmt.condition))) { try { execute(*stmt.body); } catch (const BreakSignal& ) { break; } catch (const ContinueSignal& ) { continue; } catch (const ReturnValue& ) { throw; } if (had_error_) break; } return Value(); }
+Value Interpreter::visitForStmt(AST::ForStmt& stmt) { Value start_val = evaluate(*stmt.range_start); Value end_val = evaluate(*stmt.range_end); if (!start_val.isInt() || !end_val.isInt()) throw RuntimeError("For loop range bounds must be integers.", stmt.keyword.line); int start_int = start_val.getInt(); int end_int = end_val.getInt(); if (getValueTypeFromToken(stmt.variable_type) != ValueType::INT) throw TypeError("For loop variable type must be 'int' for integer range.", stmt.variable_type.line); for (int i = start_int; i < end_int; ++i) { auto loop_env = std::make_shared<Environment>(environment); loop_env->define(stmt.variable_name.lexeme, Value(i), stmt.variable_type); std::shared_ptr<Environment> previous_env = this->environment; struct EnvironmentGuard { Interpreter& i; std::shared_ptr<Environment> o; EnvironmentGuard(Interpreter& interp, std::shared_ptr<Environment> orig) : i(interp), o(std::move(orig)) {} ~EnvironmentGuard() { i.environment = o; } } guard(*this, previous_env); this->environment = loop_env; try { execute(*stmt.body); } catch (const BreakSignal& ) { break; } catch (const ContinueSignal& ) { continue; } catch (const ReturnValue& ) { throw; } if (had_error_) break; } return Value(); }
 Value Interpreter::visitFunctionStmt(AST::FunctionStmt& stmt) { auto function = std::make_shared<LangFunction>(&stmt, environment); Token func_type_token(TokenType::FUNCTION, "function", std::monostate{}, stmt.name.line); environment->define(stmt.name.lexeme, Value(function), func_type_token, stmt.map_return_key_type_token, stmt.map_return_value_type_token, stmt.list_return_element_type_token); return Value(); }
 Value Interpreter::visitReturnStmt(AST::ReturnStmt& stmt) { Value value; if (stmt.value) { value = evaluate(*stmt.value); } throw ReturnValue(std::move(value), stmt.keyword.line); }
 Value Interpreter::visitDeleteStmt(AST::DeleteStmt& stmt) { if (AST::VariableExpr* var_expr = dynamic_cast<AST::VariableExpr*>(stmt.expression.get())) { if (!environment->undefine(var_expr->name.lexeme)) { throw RuntimeError("Cannot delete variable '" + var_expr->name.lexeme + "' as it is not defined in the current scope.", var_expr->line); } } else if (AST::IndexExpr* index_expr = dynamic_cast<AST::IndexExpr*>(stmt.expression.get())) { Value collection_val = evaluate(*(index_expr->collection)); Value index_val = evaluate(*(index_expr->index)); if (collection_val.isList()) { if (!index_val.isInt()) { throw RuntimeError("List index for delete must be an integer.", index_expr->bracket.line); } int index = index_val.getInt(); try { auto& list_data = collection_val.getListData(); size_t size = list_data.size(); int effective_index = index; if (index < 0) { effective_index = static_cast<int>(size) + index; } if (effective_index < 0 || static_cast<size_t>(effective_index) >= size) { throw RuntimeError("List index out of bounds for delete (" + std::to_string(index) + " for list of size " + std::to_string(size) + ").", index_expr->bracket.line); } list_data.erase(list_data.begin() + effective_index); } catch (const std::runtime_error& e) { throw RuntimeError(e.what(), index_expr->bracket.line); } catch (const TypeError& e) { throw TypeError(e.what(), index_expr->bracket.line); } } else if (collection_val.isMap()) { if (index_val.isMap() || index_val.isList() || index_val.isFunction() || index_val.isObject() || index_val.isNil()) { throw TypeError("Invalid type used as map key for delete: " + valueTypeToString(index_val.getType()) + ".", index_expr->bracket.line); } try { size_t erased_count = collection_val.getMapData().erase(index_val); if (erased_count == 0) { } } catch (const std::runtime_error& e) { throw RuntimeError(e.what(), index_expr->bracket.line); } catch (const TypeError& e) { throw TypeError(e.what(), index_expr->bracket.line); } } else { throw RuntimeError("Cannot perform indexed delete '[]' on type '" + valueTypeToString(collection_val.getType()) + "'.", index_expr->bracket.line); } } else if (AST::MapAccessExpr* map_access = dynamic_cast<AST::MapAccessExpr*>(stmt.expression.get())) { Value map_val = evaluate(*(map_access->map_expr)); if (!map_val.isMap()) { throw RuntimeError("Cannot perform delete on non-map type using '[]' (MapAccessExpr).", map_access->bracket.line); } Value key_val = evaluate(*(map_access->key_expr)); try { map_val.getMapData().erase(key_val); } catch (const std::runtime_error& e) { throw RuntimeError(e.what(), map_access->bracket.line); } catch (const TypeError& e) { throw TypeError(e.what(), map_access->bracket.line); } debug_log << "Warning: Using deprecated MapAccessExpr for delete at line " << stmt.keyword.line << std::endl; } else { throw RuntimeError("Operand for 'delete' must be a variable or an indexed element access.", stmt.keyword.line); } return Value(); }
 Value Interpreter::visitBreakStmt(AST::BreakStmt& stmt) { throw BreakSignal(stmt.keyword.line); }
 Value Interpreter::visitContinueStmt(AST::ContinueStmt& stmt) { throw ContinueSignal(stmt.keyword.line); }
+
+// <<< MODIFIED: visitImportStmt Implementation >>>
+Value Interpreter::visitImportStmt(AST::ImportStmt& stmt) {
+    // 1. Get the filename from the token's literal
+    if (!std::holds_alternative<std::string>(stmt.filename_token.literal)) {
+        throw RuntimeError("Internal error: Import filename token does not contain a string.", stmt.line);
+    }
+    const std::string& relative_filename = std::get<std::string>(stmt.filename_token.literal);
+
+    // --- TODO: Implement proper path resolution ---
+    // For now, assume the filename is relative to the *current working directory*
+    // A better approach resolves relative to the *importing file's directory*.
+    std::filesystem::path import_path = relative_filename; // Using relative path directly for now
+    std::string canonical_path_str;
+    try {
+         // Attempt to get a canonical path to use as a unique key for tracking imports
+         // This resolves symlinks and makes the path absolute.
+         // Requires C++17 filesystem library.
+         canonical_path_str = std::filesystem::canonical(import_path).string();
+    } catch (const std::filesystem::filesystem_error& fs_err) {
+         // If canonical fails (e.g., file not found yet), use the provided path string.
+         // We still need to try opening it.
+         canonical_path_str = relative_filename;
+         debug_log << "Warning: Could not get canonical path for '" << relative_filename << "': " << fs_err.what() << std::endl;
+    }
+
+
+    debug_log << "Attempting to import canonical path: '" << canonical_path_str << "' (from '" << relative_filename << "' at " << current_filename_ << ":" << stmt.line << ")" << std::endl;
+
+
+    // 2. Circular Dependency Check
+    if (currently_importing_.count(canonical_path_str)) {
+        debug_log << "Circular import detected: '" << canonical_path_str << "' is already being imported. Skipping." << std::endl;
+        return Value(); // Already processing this file, do nothing.
+    }
+
+    // 3. Read the file content
+    std::ifstream file_stream(import_path); // Use the original (potentially relative) path to open
+    if (!file_stream) {
+        throw RuntimeError("Cannot open import file '" + relative_filename + "'.", stmt.line);
+    }
+    std::stringstream buffer;
+    buffer << file_stream.rdbuf();
+     if (file_stream.fail() && !file_stream.eof()) { // Check for read errors
+         throw RuntimeError("Error reading import file '" + relative_filename + "'.", stmt.line);
+     }
+    std::string source_code = buffer.str();
+    file_stream.close(); // Close the file stream
+
+    // 4. Mark this file as being imported *before* processing its content
+    currently_importing_.insert(canonical_path_str);
+
+    // RAII Guard to remove the file from the set when done (even if errors occur)
+    struct ImportGuard {
+        Interpreter& interp;
+        std::string path;
+        ImportGuard(Interpreter& i, std::string p) : interp(i), path(std::move(p)) {}
+        ~ImportGuard() {
+            interp.currently_importing_.erase(path);
+            debug_log << "Finished processing import for: '" << path << "'" << std::endl;
+        }
+    } import_guard(*this, canonical_path_str);
+
+    // 5. Lex & Parse the imported code
+    debug_log << "Lexing imported file: '" << canonical_path_str << "'" << std::endl;
+    Lexer lexer(source_code);
+    std::vector<Token> tokens = lexer.scanTokens();
+    // TODO: Handle lexer errors if needed (scanTokens might just print)
+
+    debug_log << "Parsing imported file: '" << canonical_path_str << "'" << std::endl;
+    Parser parser(tokens);
+    std::vector<std::unique_ptr<AST::Statement>> statements = parser.parse();
+    // TODO: Handle parser errors (parse might just print and synchronize)
+    // Maybe check if parser encountered errors and propagate?
+
+    // 6. Execute the parsed statements
+    // Important: The imported code runs in the *current* environment for now.
+    // We need to decide how to handle scope/namespaces later.
+    // We recursively call interpret, passing the imported file's context.
+    debug_log << "Interpreting imported file: '" << canonical_path_str << "'" << std::endl;
+    std::vector<std::string> imported_source_lines = splitIntoLines(source_code); // Get lines for error reporting
+    interpret(statements, canonical_path_str, imported_source_lines);
+
+    // Check if an error occurred during the interpretation of the imported file
+    if (had_error_) {
+        // Propagate the error state - maybe throw a specific Import Error?
+        // For now, the 'had_error_' flag is set, and execution of the *current* file will stop after this statement.
+        debug_log << "Error occurred during interpretation of imported file: '" << canonical_path_str << "'" << std::endl;
+        // Optionally, throw an error here to make it more explicit in the importing file.
+        // throw RuntimeError("Failed to import file '" + relative_filename + "' due to errors.", stmt.line);
+    }
+
+    // --- TODO: Scope/Namespace Management ---
+    // Decide how symbols defined in the imported file are accessed.
+    // Options:
+    //   a) Merge into current global scope (simplest, causes potential conflicts). (Current behavior)
+    //   b) Return a 'module' object (e.g., a map) containing the exported symbols.
+    //   c) Require explicit exporting/importing of specific symbols.
+    // --- End TODO ---
+
+    return Value(); // Import statement itself doesn't produce a value
+}
+// <<< END MODIFIED >>>
 
 
 // --- Helpers ---
@@ -250,3 +305,18 @@ void Interpreter::checkStringOperand(const Token& op, const Value& operand) { if
 ValueType Interpreter::getValueTypeFromToken(const Token& type_token) { switch(type_token.type) { case TokenType::INT: return ValueType::INT; case TokenType::FLOAT: return ValueType::FLOAT; case TokenType::BOOL: return ValueType::BOOL; case TokenType::STRING_TYPE: return ValueType::STRING; case TokenType::OBJ: return ValueType::OBJECT; case TokenType::NIL: return ValueType::NIL; case TokenType::MAP: return ValueType::MAP; case TokenType::LIST: return ValueType::LIST; case TokenType::FUNCTION: return ValueType::FUNCTION; default: throw RuntimeError("Invalid type specifier token encountered: " + tokenTypeToString(type_token.type) , type_token.line); } }
 void Interpreter::checkType(const Value& value_to_check, const Token& expected_type_token, const std::optional<Token>& expected_map_key_type_token, const std::optional<Token>& expected_map_value_type_token, const std::optional<Token>& expected_list_element_type_token, const std::string& context, int line_num) { ValueType expected_primary_type = getValueTypeFromToken(expected_type_token); ValueType actual_type = value_to_check.getType(); if (actual_type == ValueType::NIL) { if (expected_primary_type == ValueType::NIL || expected_primary_type == ValueType::OBJECT || expected_primary_type == ValueType::MAP || expected_primary_type == ValueType::FUNCTION || expected_primary_type == ValueType::LIST) { return; } else { throw TypeError("Cannot assign 'nil' to type '" + tokenTypeToString(expected_type_token.type) + "' in " + context + ".", line_num); } } bool primary_type_mismatch = false; if (expected_primary_type == ValueType::FLOAT && actual_type == ValueType::INT) { /* Allowed */ } else if (expected_primary_type == ValueType::FUNCTION && (actual_type == ValueType::FUNCTION || actual_type == ValueType::NATIVE_FUNCTION)) { /* Allowed */ } else if (actual_type != expected_primary_type) { if (expected_primary_type != ValueType::OBJECT) { primary_type_mismatch = true; } } if (primary_type_mismatch) { throw TypeError("Type mismatch for " + context + ". Expected '" + valueTypeToString(expected_primary_type) + "' but got '" + valueTypeToString(actual_type) + "'.", line_num); } if (expected_primary_type == ValueType::MAP && expected_map_key_type_token && expected_map_value_type_token && !value_to_check.isNil()) { if (!value_to_check.isMap()) { throw TypeError("Type mismatch for " + context + ". Expected 'map' but got '" + valueTypeToString(actual_type) + "'.", line_num); } Token key_type_token_for_check = expected_map_key_type_token.value(); Token value_type_token_for_check = expected_map_value_type_token.value(); const auto& map_data = value_to_check.getMapData(); for (const auto& pair : map_data) { checkType(pair.first, key_type_token_for_check, std::nullopt, std::nullopt, std::nullopt, context + " map key", line_num); checkType(pair.second, value_type_token_for_check, std::nullopt, std::nullopt, std::nullopt, context + " map value for key " + pair.first.toString(), line_num); } } else if (expected_primary_type == ValueType::LIST && expected_list_element_type_token && !value_to_check.isNil()) { if (!value_to_check.isList()) { throw TypeError("Type mismatch for " + context + ". Expected 'list' but got '" + valueTypeToString(actual_type) + "'.", line_num); } Token element_type_token_for_check = expected_list_element_type_token.value(); const auto& list_data = value_to_check.getListData(); int element_index = 0; for (const auto& element : list_data) { checkType(element, element_type_token_for_check, std::nullopt, std::nullopt, std::nullopt, context + " list element at index " + std::to_string(element_index), line_num); element_index++; } } }
 void Interpreter::checkType(const Value& value, const Token& type_specifier_token, const std::string& context, int line_num) { checkType(value, type_specifier_token, std::nullopt, std::nullopt, std::nullopt, context, line_num); }
+
+// <<< ADDED: Helper to split source into lines for error reporting >>>
+std::vector<std::string> Interpreter::splitIntoLines(const std::string& source) {
+    std::vector<std::string> lines;
+    std::stringstream ss(source);
+    std::string line;
+    while (std::getline(ss, line, '\n')) {
+        // Handle potential '\r' at the end of lines (Windows line endings)
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        lines.push_back(line);
+    }
+    return lines;
+}

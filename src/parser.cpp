@@ -20,17 +20,17 @@ Parser::Parser(const std::vector<Token>& tokens) : tokens(tokens) {}
 // --- Main Parsing Logic ---
 std::vector<std::unique_ptr<AST::Statement>> Parser::parse() {
     std::vector<std::unique_ptr<AST::Statement>> statements;
-    while (!isAtEnd()) { // <<< Uses isAtEnd()
+    while (!isAtEnd()) {
         if (peek().type == TokenType::END_OF_FILE) { break; }
         std::unique_ptr<AST::Statement> decl = nullptr;
         int current_before_decl = current;
         try {
-            decl = declaration();
+            decl = declaration(); // Try parsing a declaration first
             if (decl) {
                 statements.push_back(std::move(decl));
             } else {
                  // Avoid infinite loops if declaration() fails without advancing
-                 if (!isAtEnd() && current == current_before_decl && peek().type != TokenType::END_OF_FILE) { // <<< Uses isAtEnd()
+                 if (!isAtEnd() && current == current_before_decl && peek().type != TokenType::END_OF_FILE) {
                      debug_log << "Warning: Parser::parse declaration() returned nullptr and did not advance. Forcing advance past token: " << peek().toString() << std::endl;
                      advance(); // Force progress
                  }
@@ -67,7 +67,7 @@ std::vector<std::unique_ptr<AST::Statement>> Parser::parse() {
 
 // --- Grammar Rule Implementations ---
 
-// declaration -> funDeclaration | varDeclaration | statement ;
+// declaration -> funDeclaration | varDeclaration | importStatement | statement ; // <<< Added importStatement here
 std::unique_ptr<AST::Statement> Parser::declaration() {
     try {
         if (match({TokenType::FN})) {
@@ -81,6 +81,12 @@ std::unique_ptr<AST::Statement> Parser::declaration() {
         {
             return varDeclaration();
         }
+        // <<< ADDED: Check for import keyword >>>
+        if (match({TokenType::IMPORT})) {
+            return importStatement();
+        }
+        // <<< END ADDED >>>
+
         // If at EOF, return nullptr cleanly
         if (check(TokenType::END_OF_FILE)) {
             return nullptr;
@@ -213,6 +219,7 @@ std::vector<std::pair<Token, Token>> Parser::parameters() {
 }
 
 // statement -> printStatement | breakStatement | continueStatement | block | ifStatement | whileStatement | forStatement | returnStatement | deleteStatement | expressionStatement ;
+// Note: importStatement is handled in declaration() now.
 std::unique_ptr<AST::Statement> Parser::statement() {
     if (match({TokenType::PRINT})) return printStatement();
     if (match({TokenType::BREAK})) return breakStatement();
@@ -230,6 +237,21 @@ std::unique_ptr<AST::Statement> Parser::statement() {
     // If none of the above match, assume it's an expression statement
     return expressionStatement();
 }
+
+// <<< ADDED: Implementation for importStatement >>>
+// importStatement -> "import" STRING ";" ;
+std::unique_ptr<AST::Statement> Parser::importStatement() {
+    Token keyword = previous(); // The 'import' token we already matched in declaration()
+    Token filename_token = consume(TokenType::STRING, "Expect filename string after 'import'.");
+    consume(TokenType::SEMICOLON, "Expect ';' after import statement.");
+
+    // Create the ImportStmt AST node
+    auto import_stmt = std::make_unique<AST::ImportStmt>(keyword, filename_token);
+    import_stmt->line = keyword.line; // Use line of 'import' keyword
+    return import_stmt;
+}
+// <<< END ADDED >>>
+
 
 // expressionStatement -> expression ";" ;
 std::unique_ptr<AST::Statement> Parser::expressionStatement() {
@@ -270,14 +292,14 @@ std::unique_ptr<AST::Statement> Parser::block() {
     int start_line = previous().line; // Line of the opening '{'
 
     // Continue parsing declarations/statements until '}' or EOF is encountered
-    while (!check(TokenType::RIGHT_BRACE) && !isAtEnd()) { // <<< Uses isAtEnd()
+    while (!check(TokenType::RIGHT_BRACE) && !isAtEnd()) {
         auto decl = declaration(); // Parse one statement or declaration
         if(decl) {
             statements.push_back(std::move(decl));
         } else {
             // Handle cases where declaration() might return nullptr without error (e.g., EOF reached unexpectedly)
             // or if an error occurred and was synchronized within declaration().
-            if (!isAtEnd() && !check(TokenType::RIGHT_BRACE)) { // <<< Uses isAtEnd()
+            if (!isAtEnd() && !check(TokenType::RIGHT_BRACE)) {
                  debug_log << "Warning: Null statement encountered inside block at line " << peek().line << ". Attempting to continue." << std::endl;
                  // Avoid getting stuck if declaration() fails but doesn't advance or throw
                  // This might happen if synchronize() recovers poorly. Consider advancing here if needed.
@@ -374,7 +396,7 @@ std::unique_ptr<AST::Statement> Parser::returnStatement() {
         value = expression(); // Parse the return value expression
         // If expression() returned null AND we are not at a semicolon, it's an invalid expression.
         // Note: expression() returning null might also mean a valid parse error occurred within it.
-        if (!value && !isAtEnd() && !check(TokenType::SEMICOLON)) { // <<< Uses isAtEnd()
+        if (!value && !isAtEnd() && !check(TokenType::SEMICOLON)) {
              throw error(peek(), "Invalid expression after 'return'.");
         }
     }
@@ -430,7 +452,7 @@ std::unique_ptr<AST::Statement> Parser::continueStatement() {
 
 // --- Expression Parsing ---
 // expression -> assignment ;
-std::unique_ptr<AST::Expression> Parser::expression() { // <<< Definition is public
+std::unique_ptr<AST::Expression> Parser::expression() { // Definition is public
     return assignment(); // Start parsing from the lowest precedence level (assignment)
 }
 
@@ -886,25 +908,23 @@ bool Parser::match(const std::vector<TokenType>& types) {
 
 // Checks if the current token is of the given type without consuming it.
 bool Parser::check(TokenType type) const {
-    if (isAtEnd()) return false; // Cannot check if at the end // <<< Uses isAtEnd()
+    if (isAtEnd()) return false; // Cannot check if at the end
     return peek().type == type;
 }
 
 // Consumes the current token and returns the *previous* token.
 Token Parser::advance() {
-    if (!isAtEnd()) current++; // Move to the next token // <<< Uses isAtEnd()
+    if (!isAtEnd()) current++; // Move to the next token
     return previous(); // Return the token that was just consumed
 }
 
-// <<< ADDED: Definition for isAtEnd >>>
-// Checks if the parser has reached the end of the token stream.
+// Definition for isAtEnd (public)
 bool Parser::isAtEnd() const {
     // Check if index is out of bounds OR if the current token is EOF
     // Note: We check >= size() because the 'tokens' vector might be empty.
     // peek() handles the case where current == tokens.size() by returning EOF.
     return current >= static_cast<int>(tokens.size()) || peek().type == TokenType::END_OF_FILE;
 }
-// <<< END ADDED >>>
 
 
 // Returns the current token without consuming it.
@@ -959,7 +979,7 @@ SyntaxError Parser::error(const Token& token, const std::string& message) {
 void Parser::synchronize() {
     advance(); // Consume the token that caused the error
 
-    while (!isAtEnd()) { // <<< Uses isAtEnd()
+    while (!isAtEnd()) {
         // Stop synchronizing if the previous token was a semicolon (likely end of a statement)
         if (previous().type == TokenType::SEMICOLON) {
              debug_log << "DEBUG: Synchronize stopped after SEMICOLON." << std::endl;
@@ -971,6 +991,7 @@ void Parser::synchronize() {
             case TokenType::CLASS: // Add other relevant keywords
             case TokenType::FN:
             case TokenType::VAR:
+            case TokenType::IMPORT: // <<< ADDED IMPORT here
             case TokenType::INT: // Type keywords
             case TokenType::FLOAT:
             case TokenType::BOOL:

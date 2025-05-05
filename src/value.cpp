@@ -292,37 +292,72 @@ int LangFunction::arity() const {
 }
 
 Value LangFunction::call(Interpreter& interpreter, const std::vector<Value>& arguments) {
+    // Create a new environment for the function call, enclosing the closure environment.
     auto environment = std::make_shared<Environment>(closure);
-    if (!declaration) { throw RuntimeError("Internal error: Calling null function declaration."); }
+
+    // Ensure the function declaration is valid before proceeding.
+    if (!declaration) {
+        // Throw a runtime error if the function declaration pointer is null.
+        throw RuntimeError("Internal error: Calling null function declaration.");
+        // Note: Consider adding line number information if available, perhaps from where the function was defined or called.
+    }
+
+    // Define parameters in the new environment using the provided arguments.
+    // Assumes arguments vector size matches parameter list size (checked in Interpreter::visitCallExpr).
     for (size_t i = 0; i < declaration->params.size(); ++i) {
+        // Define each parameter name with its corresponding argument value.
         environment->define(declaration->params[i].second.lexeme, arguments[i]);
+        // Note: Type checking for arguments against parameter types should happen *before* this call,
+        // typically in Interpreter::visitCallExpr.
     }
+
     try {
+        // Execute the function body within the new environment.
         interpreter.executeBlock(declaration->body->statements, environment);
-    } catch (const ReturnValue& returnValue) {
+    } catch (const ReturnValue& ret_val) { // Catch explicit return statements.
+        // Type check the returned value against the function's declared return type.
         try {
-            interpreter.checkType(returnValue.value, declaration->return_type,
-                                  declaration->map_return_key_type_token,
-                                  declaration->map_return_value_type_token,
-                                  declaration->list_return_element_type_token,
-                                  "return value of function '" + declaration->name.lexeme + "'",
-                                  returnValue.line);
+            interpreter.checkType(
+                ret_val.value,                           // <<< FIXED: Check the .value member
+                declaration->return_type_token,          // Pass the primary return type token
+                declaration->map_return_key_type_token,  // Pass optional map key type
+                declaration->map_return_value_type_token,// Pass optional map value type
+                declaration->list_return_element_type_token, // Pass optional list element type
+                "function '" + declaration->name.lexeme + "' return value", // Context message
+                ret_val.line                             // Line number from the return statement
+            );
         } catch (const TypeError& type_error) {
-            throw TypeError(type_error.what(), returnValue.line);
+            // Re-throw type errors with the line number of the return statement.
+            throw TypeError(type_error.what(), ret_val.line);
         }
-        return returnValue.value;
+        // If type check passes, return the value from the ReturnValue exception.
+        return ret_val.value;
     }
-    Value implicit_return_value;
+    // Catch other exceptions if needed (e.g., BreakSignal, ContinueSignal should not escape a function)
+    // catch (...) { ... }
+
+    // --- Handle Implicit Return (function finished without explicit 'return') ---
+    // Create a default nil value for implicit returns.
+    Value implicit_return_value; // Defaults to ValueType::NIL
+
+    // Check if the implicit nil return matches the declared return type.
     try {
-         interpreter.checkType(implicit_return_value, declaration->return_type,
-                               declaration->map_return_key_type_token,
-                               declaration->map_return_value_type_token,
-                               declaration->list_return_element_type_token,
-                               "implicit return from function '" + declaration->name.lexeme + "'",
-                               declaration->name.line);
+         interpreter.checkType(
+            implicit_return_value,                   // Check the implicit nil value
+            declaration->return_type_token,          // <<< FIXED: Use return_type_token
+            declaration->map_return_key_type_token,
+            declaration->map_return_value_type_token,
+            declaration->list_return_element_type_token,
+            "implicit return from function '" + declaration->name.lexeme + "'", // Context
+            declaration->name.line                   // Line number of function definition (best guess)
+        );
     } catch (const TypeError& type_error) {
-         throw TypeError(type_error.what(), declaration->name.line);
+        // If nil is not compatible with the declared return type, throw an error.
+        // Use the function definition line number for this error.
+        throw TypeError(type_error.what(), declaration->name.line);
     }
+
+    // If the type check passes (meaning nil is allowed or expected), return the implicit nil.
     return implicit_return_value;
 }
 

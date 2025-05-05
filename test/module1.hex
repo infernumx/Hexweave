@@ -1,0 +1,13 @@
+// module1.hex
+
+print("--- Inside module1.hex ---");
+
+var module1_message = "Hello from Module 1!";
+
+fn sayHello(string name) : nil {
+    print("Module 1 says: Hello, " + name + "!");
+    return;
+}
+sayHello("Greg");
+
+print("--- Finished loading module1.hex ---");

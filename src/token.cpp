@@ -6,7 +6,7 @@
 // --- Function to convert TokenType to string ---
 std::string tokenTypeToString(TokenType type) {
     switch(type) {
-        // ... (cases for other tokens) ...
+        // Single-character tokens
         case TokenType::LEFT_PAREN: return "LEFT_PAREN";
         case TokenType::RIGHT_PAREN: return "RIGHT_PAREN";
         case TokenType::LEFT_BRACE: return "LEFT_BRACE";
@@ -23,6 +23,8 @@ std::string tokenTypeToString(TokenType type) {
         case TokenType::PERCENT: return "PERCENT";
         case TokenType::PIPE: return "PIPE";
         case TokenType::COLON: return "COLON";
+
+        // One or two character tokens
         case TokenType::BANG: return "BANG";
         case TokenType::BANG_EQUAL: return "BANG_EQUAL";
         case TokenType::EQUAL: return "EQUAL";
@@ -31,11 +33,15 @@ std::string tokenTypeToString(TokenType type) {
         case TokenType::GREATER_EQUAL: return "GREATER_EQUAL";
         case TokenType::LESS: return "LESS";
         case TokenType::LESS_EQUAL: return "LESS_EQUAL";
+
+        // Literals
         case TokenType::IDENTIFIER: return "IDENTIFIER";
         case TokenType::STRING: return "STRING";
         case TokenType::NUMBER_INT: return "NUMBER_INT";
         case TokenType::NUMBER_FLOAT: return "NUMBER_FLOAT";
-        case TokenType::INTERPOLATED_STRING: return "INTERPOLATED_STRING"; // <<< ADDED
+        case TokenType::INTERPOLATED_STRING: return "INTERPOLATED_STRING";
+
+        // Keywords
         case TokenType::AND: return "AND";
         case TokenType::CLASS: return "CLASS";
         case TokenType::ELSE: return "ELSE";
@@ -57,14 +63,20 @@ std::string tokenTypeToString(TokenType type) {
         case TokenType::BREAK: return "BREAK";
         case TokenType::CONTINUE: return "CONTINUE";
         case TokenType::LIST: return "LIST";
+        case TokenType::IMPORT: return "IMPORT"; // <<< ADDED IMPORT case
+
+        // Type Keywords
         case TokenType::INT: return "INT";
         case TokenType::FLOAT: return "FLOAT";
         case TokenType::BOOL: return "BOOL";
         case TokenType::STRING_TYPE: return "STRING_TYPE";
         case TokenType::OBJ: return "OBJ";
         case TokenType::FUNCTION: return "FUNCTION";
+
+        // Special
         case TokenType::END_OF_FILE: return "EOF";
         case TokenType::UNKNOWN: return "UNKNOWN";
+
         default: return "INVALID_TOKEN_TYPE";
     }
 }
@@ -84,7 +96,6 @@ std::string Token::toString() const {
         } else if constexpr (std::is_same_v<T, bool>) {
             literal_str = value ? "true" : "false";
         }
-        // <<< ADDED: Handling for InterpolatedStringData >>>
         else if constexpr (std::is_same_v<T, InterpolatedStringData>) {
              std::stringstream ss;
              ss << "[";
@@ -101,7 +112,6 @@ std::string Token::toString() const {
              ss << "]";
              literal_str = ss.str();
         }
-        // <<< END ADDED >>>
         // std::monostate (NilType) is handled by the default "None"
     }, literal);
 

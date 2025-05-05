@@ -1,5 +1,6 @@
 #include "lexer.hpp"
 #include "common.hpp" // For error reporting (optional), debug_log
+#include "token.hpp"  // <<< Ensure TokenType::IMPORT is defined here
 #include <iostream>   // For error reporting (can be replaced with better logging)
 #include <stdexcept>  // For errors like unterminated string
 #include <cctype>     // For isdigit, isalpha
@@ -10,33 +11,35 @@
 
 // Initialize the static keywords map
 const std::unordered_map<std::string, TokenType> Lexer::keywords = {
-    {"and",    TokenType::AND},
-    {"class",  TokenType::CLASS},
-    {"else",   TokenType::ELSE},
-    {"false",  TokenType::FALSE},
-    {"for",    TokenType::FOR},
-    {"fn",     TokenType::FN},
-    {"if",     TokenType::IF},
-    {"nil",    TokenType::NIL},
-    {"or",     TokenType::OR},
-    {"print",  TokenType::PRINT},
-    {"return", TokenType::RETURN},
-    {"super",  TokenType::SUPER},
-    {"this",   TokenType::THIS},
-    {"true",   TokenType::TRUE},
-    {"var",    TokenType::VAR},
-    {"while",  TokenType::WHILE},
-    {"map",    TokenType::MAP},
-    {"delete", TokenType::DELETE},
-    {"break",  TokenType::BREAK},
+    {"and",      TokenType::AND},
+    {"class",    TokenType::CLASS},
+    {"else",     TokenType::ELSE},
+    {"false",    TokenType::FALSE},
+    {"for",      TokenType::FOR},
+    {"fn",       TokenType::FN},
+    {"if",       TokenType::IF},
+    {"nil",      TokenType::NIL},
+    {"or",       TokenType::OR},
+    {"print",    TokenType::PRINT},
+    {"return",   TokenType::RETURN},
+    {"super",    TokenType::SUPER},
+    {"this",     TokenType::THIS},
+    {"true",     TokenType::TRUE},
+    {"var",      TokenType::VAR},
+    {"while",    TokenType::WHILE},
+    {"map",      TokenType::MAP},
+    {"delete",   TokenType::DELETE},
+    {"break",    TokenType::BREAK},
     {"continue", TokenType::CONTINUE},
-    {"list",   TokenType::LIST},
+    {"list",     TokenType::LIST},
+    {"import",   TokenType::IMPORT}, // <<< ADDED 'import' keyword
     // Type keywords
-    {"int",    TokenType::INT},
-    {"float",  TokenType::FLOAT},
-    {"bool",   TokenType::BOOL},
-    {"string", TokenType::STRING_TYPE},
-    {"obj",    TokenType::OBJ}
+    {"int",      TokenType::INT},
+    {"float",    TokenType::FLOAT},
+    {"bool",     TokenType::BOOL},
+    {"string",   TokenType::STRING_TYPE},
+    {"obj",      TokenType::OBJ},
+    {"function", TokenType::FUNCTION} // Added FUNCTION keyword if it wasn't there
 };
 
 
@@ -66,8 +69,8 @@ void Lexer::addToken(TokenType type) {
     addToken(type, std::monostate{});
 }
 
-// <<< UPDATED addToken overload to accept new variant type >>>
-void Lexer::addToken(TokenType type, const std::variant<std::monostate, std::string, int, double, bool, InterpolatedStringData>& literal) {
+// Overload to accept the variant type for literals
+void Lexer::addToken(TokenType type, const TokenLiteral& literal) {
     if (start < 0 || start > static_cast<int>(source.length()) || current < start || current > static_cast<int>(source.length())) {
          debug_log << "Lexer Internal Error (Line " << line << "): Invalid indices for substring (start=" << start << ", current=" << current << ")" << std::endl;
          tokens.emplace_back(TokenType::UNKNOWN, "LEXER_INDEX_ERROR", std::monostate{}, line);
@@ -77,7 +80,7 @@ void Lexer::addToken(TokenType type, const std::variant<std::monostate, std::str
     std::string text = source.substr(start, current - start);
     tokens.emplace_back(type, std::move(text), literal, line);
 }
-// <<< END UPDATED addToken >>>
+
 
 bool Lexer::match(char expected) {
     if (isAtEnd()) return false;
@@ -131,7 +134,6 @@ void Lexer::scanString() {
     addToken(TokenType::STRING, value_builder.str());
 }
 
-// <<< ADDED: Implementation for scanInterpolatedString >>>
 // Scans an interpolated string literal `...{expr}...`
 void Lexer::scanInterpolatedString() {
     InterpolatedStringData parts;
@@ -237,24 +239,77 @@ void Lexer::scanInterpolatedString() {
     // Add the INTERPOLATED_STRING token with the structured data
     addToken(TokenType::INTERPOLATED_STRING, parts);
 }
-// <<< END ADDED >>>
 
-// ... (scanNumber, isAlphaNumeric, isAlpha, scanIdentifier, scanBlockComment remain the same) ...
-void Lexer::scanNumber() { bool is_float = false; while (isdigit(peek())) advance(); if (peek() == '.' && isdigit(peekNext())) { is_float = true; advance(); while (isdigit(peek())) advance(); } std::string num_str = source.substr(start, current - start); try { if (is_float) { addToken(TokenType::NUMBER_FLOAT, std::stod(num_str)); } else { addToken(TokenType::NUMBER_INT, std::stoi(num_str)); } } catch (const std::invalid_argument& ia) { std::cerr << "Lexer Error (Line " << line << "): Invalid number format: " << num_str << ". " << ia.what() << std::endl; debug_log << "Lexer Error (Line " << line << "): Invalid number format: " << num_str << ". " << ia.what() << std::endl; addToken(TokenType::UNKNOWN); } catch (const std::out_of_range& oor) { std::cerr << "Lexer Error (Line " << line << "): Number literal out of range: " << num_str << ". " << oor.what() << std::endl; debug_log << "Lexer Error (Line " << line << "): Number literal out of range: " << num_str << ". " << oor.what() << std::endl; addToken(TokenType::UNKNOWN); } }
-bool isAlphaNumeric(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'; }
+void Lexer::scanNumber() {
+    bool is_float = false;
+    while (isdigit(peek())) advance();
+    if (peek() == '.' && isdigit(peekNext())) {
+        is_float = true;
+        advance(); // Consume the '.'
+        while (isdigit(peek())) advance();
+    }
+    std::string num_str = source.substr(start, current - start);
+    try {
+        if (is_float) {
+            addToken(TokenType::NUMBER_FLOAT, std::stod(num_str));
+        } else {
+            addToken(TokenType::NUMBER_INT, std::stoi(num_str));
+        }
+    } catch (const std::invalid_argument& ia) {
+        std::cerr << "Lexer Error (Line " << line << "): Invalid number format: " << num_str << ". " << ia.what() << std::endl;
+        debug_log << "Lexer Error (Line " << line << "): Invalid number format: " << num_str << ". " << ia.what() << std::endl;
+        addToken(TokenType::UNKNOWN);
+    } catch (const std::out_of_range& oor) {
+        std::cerr << "Lexer Error (Line " << line << "): Number literal out of range: " << num_str << ". " << oor.what() << std::endl;
+        debug_log << "Lexer Error (Line " << line << "): Number literal out of range: " << num_str << ". " << oor.what() << std::endl;
+        addToken(TokenType::UNKNOWN);
+    }
+}
+
+// Helper functions for identifier scanning
 bool isAlpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
-void Lexer::scanIdentifier() { while (isAlphaNumeric(peek())) advance(); std::string text = source.substr(start, current - start); auto it = keywords.find(text); addToken(it == keywords.end() ? TokenType::IDENTIFIER : it->second); }
-void Lexer::scanBlockComment() { int nesting = 1; while (nesting > 0 && !isAtEnd()) { if (peek() == '/' && peekNext() == '*') { advance(); advance(); nesting++; } else if (peek() == '*' && peekNext() == '/') { advance(); advance(); nesting--; } else if (peek() == '\n') { line++; advance(); } else { advance(); } } if (isAtEnd() && nesting > 0) { std::cerr << "Lexer Error (Line " << line << "): Unterminated block comment." << std::endl; debug_log << "Lexer Error (Line " << line << "): Unterminated block comment." << std::endl; } }
+bool isAlphaNumeric(char c) { return isAlpha(c) || isdigit(c); }
+
+void Lexer::scanIdentifier() {
+    while (isAlphaNumeric(peek())) advance();
+    std::string text = source.substr(start, current - start);
+    auto it = keywords.find(text);
+    addToken(it == keywords.end() ? TokenType::IDENTIFIER : it->second);
+}
+
+void Lexer::scanBlockComment() {
+    int nesting = 1;
+    int comment_start_line = line; // Store line where comment started for error reporting
+    while (nesting > 0 && !isAtEnd()) {
+        if (peek() == '/' && peekNext() == '*') {
+            advance(); advance();
+            nesting++;
+        } else if (peek() == '*' && peekNext() == '/') {
+            advance(); advance();
+            nesting--;
+        } else if (peek() == '\n') {
+            line++;
+            advance();
+        } else {
+            advance();
+        }
+    }
+    if (isAtEnd() && nesting > 0) {
+        std::cerr << "Lexer Error (Line " << comment_start_line << "): Unterminated block comment." << std::endl;
+        debug_log << "Lexer Error (Line " << comment_start_line << "): Unterminated block comment." << std::endl;
+        // No token is added for comments
+    }
+}
 
 
 // Scans the next token from the source string.
 void Lexer::scanToken() {
     char c = advance(); // Consume the next character
 
-    if (c == '\0' && isAtEnd()) return;
+    if (c == '\0' && isAtEnd()) return; // Should not happen if called correctly, but safe check
 
     switch (c) {
-        // ... (cases for single/double char tokens, /, whitespace, newline remain the same) ...
+        // Single/double char tokens
         case '(': addToken(TokenType::LEFT_PAREN); break;
         case ')': addToken(TokenType::RIGHT_PAREN); break;
         case '{': addToken(TokenType::LEFT_BRACE); break;
@@ -274,24 +329,42 @@ void Lexer::scanToken() {
         case '=': addToken(match('=') ? TokenType::EQUAL_EQUAL : TokenType::EQUAL); break;
         case '<': addToken(match('=') ? TokenType::LESS_EQUAL : TokenType::LESS); break;
         case '>': addToken(match('=') ? TokenType::GREATER_EQUAL : TokenType::GREATER); break;
-        case '/': if (match('/')) { while (peek() != '\n' && !isAtEnd()) advance(); } else if (match('*')) { scanBlockComment(); } else { addToken(TokenType::SLASH); } break;
-        case ' ': case '\r': case '\t': break;
-        case '\n': line++; break;
+
+        // Slash, comments
+        case '/':
+            if (match('/')) { // Single-line comment
+                while (peek() != '\n' && !isAtEnd()) advance();
+            } else if (match('*')) { // Block comment
+                scanBlockComment();
+            } else { // Division operator
+                addToken(TokenType::SLASH);
+            }
+            break;
+
+        // Whitespace
+        case ' ':
+        case '\r':
+        case '\t':
+            // Ignore whitespace.
+            break;
+
+        case '\n':
+            line++;
+            break;
 
         // String literals
         case '"': scanString(); break;
-
-        // <<< ADDED: Case for backtick to start interpolated string >>>
         case '`': scanInterpolatedString(); break;
-        // <<< END ADDED >>>
 
         default:
-            if (isdigit(c)) { scanNumber(); }
-            else if (isAlpha(c)) { scanIdentifier(); }
-            else {
+            if (isdigit(c)) {
+                scanNumber();
+            } else if (isAlpha(c)) { // Handles identifiers and keywords
+                scanIdentifier();
+            } else {
                 std::cerr << "Lexer Error (Line " << line << "): Unexpected character '" << c << "'" << std::endl;
                 debug_log << "Lexer Error (Line " << line << "): Unexpected character '" << c << "'" << std::endl;
-                addToken(TokenType::UNKNOWN);
+                addToken(TokenType::UNKNOWN); // Add an UNKNOWN token to signify the error point
             }
             break;
     }

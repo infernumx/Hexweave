@@ -12,7 +12,7 @@
 
 // Parses a stream of tokens into an Abstract Syntax Tree (AST)
 class Parser {
-public: // <<< MOVED expression() and isAtEnd() HERE >>>
+public:
     Parser(const std::vector<Token>& tokens);
 
     std::vector<std::unique_ptr<AST::Statement>> parse();
@@ -35,7 +35,7 @@ private:
     bool match(const std::vector<TokenType>& types);
     bool check(TokenType type) const;
     Token advance();
-    // bool isAtEnd() const; // <<< MOVED TO PUBLIC >>>
+    // bool isAtEnd() const; // Definition is in .cpp, declaration is public
     Token peek() const;
     Token previous() const;
     Token consume(TokenType type, const std::string& message);
@@ -48,6 +48,7 @@ private:
     std::unique_ptr<AST::FunctionStmt> functionBody(const std::string& kind);
     std::vector<std::pair<Token, Token>> parameters();
     std::unique_ptr<AST::Statement> statement();
+    std::unique_ptr<AST::Statement> importStatement(); // <<< ADDED
     std::unique_ptr<AST::Statement> expressionStatement();
     std::unique_ptr<AST::Statement> printStatement();
     std::unique_ptr<AST::Statement> block();
@@ -58,7 +59,7 @@ private:
     std::unique_ptr<AST::Statement> deleteStatement();
     std::unique_ptr<AST::Statement> breakStatement();
     std::unique_ptr<AST::Statement> continueStatement();
-    // std::unique_ptr<AST::Expression> expression(); // <<< MOVED TO PUBLIC >>>
+    // std::unique_ptr<AST::Expression> expression(); // Declaration is public
     std::unique_ptr<AST::Expression> assignment();
     std::unique_ptr<AST::Expression> logicOr();
     std::unique_ptr<AST::Expression> logicAnd();

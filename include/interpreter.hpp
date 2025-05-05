@@ -11,9 +11,9 @@
 #include <optional> // For optional tokens
 #include <string> // For filename
 #include <utility> // For std::move
+#include <set>       // <<< ADDED: For tracking imported files
 
-
-// (Constructors and members as before)
+// (Exception classes ReturnValue, BreakSignal, ContinueSignal remain the same)
 class ReturnValue : public std::runtime_error {
 public:
     Value value;
@@ -81,6 +81,7 @@ public:
     Value visitDeleteStmt(AST::DeleteStmt& stmt) override;
     Value visitBreakStmt(AST::BreakStmt& stmt) override;
     Value visitContinueStmt(AST::ContinueStmt& stmt) override;
+    Value visitImportStmt(AST::ImportStmt& stmt) override;
 
     std::shared_ptr<Environment> getGlobalEnvironment() const;
 
@@ -95,11 +96,11 @@ public:
 
     ValueType getValueTypeFromToken(const Token& type_token);
 
-    // <<< FIXED: Added optional context_msg parameter to match definition >>>
+    // reportError declaration already includes optional context_msg
     void reportError(const LangError& error,
                      const std::string& filename,
                      const std::vector<std::string>& source_lines,
-                     const std::string& context_msg = ""); // Added default value
+                     const std::string& context_msg = "");
 
 private:
     std::shared_ptr<Environment> globals;
@@ -110,6 +111,11 @@ private:
     std::string current_filename_ = "<unknown>";
     std::vector<std::string> current_source_lines_;
 
+    // <<< ADDED: Set to track files currently being imported to prevent cycles >>>
+    std::set<std::string> currently_importing_;
+    // <<< END ADDED >>>
+
+
     Value evaluate(AST::Expression& expr);
     void execute(AST::Statement& stmt);
     bool isTruthy(const Value& value);
@@ -118,6 +124,10 @@ private:
     void checkStringOperand(const Token& op, const Value& operand);
 
     std::string getSourceLineInternal(const std::vector<std::string>& lines, int line_num);
+
+    // <<< ADDED: Helper to split source into lines >>>
+    std::vector<std::string> splitIntoLines(const std::string& source);
+    // <<< END ADDED >>>
 
 };
 
